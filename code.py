@@ -1,10 +1,8 @@
-
 import math
 import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
-import time
 
 class MLP(nn.Module):
     def __init__(self, in_dim=2, out_dim=1, hidden=64, depth=4, act=nn.Tanh):
@@ -91,7 +89,7 @@ class PINN:
         L_total = self.lambda_pde * L_pde + self.lambda_bc * L_bc + self.lambda_ic * L_ic
         return L_total, L_pde, L_ic, L_bc
 
-    def train_adam(self, iters=4000, lr=1e-3, print_every=200):
+    def train_adam(self, iters=4000, lr=1e-3, print_every=1000):
         opt = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.model.train()
         for it in range(1, iters + 1):
@@ -101,9 +99,13 @@ class PINN:
             opt.step()
             self._log(L_total, L_pde, L_ic, L_bc)
             if it % print_every == 0:
-                pass # Suppressed per-step printing for cleaner multi-run output
+                print(
+                    f"  [PINN Adam] iter={it:6d} "
+                    f"total={L_total.item():.3e} "
+                    f"pde={L_pde.item():.3e} bc={L_bc.item():.3e}"
+                )
 
-    def train_lbfgs(self, max_iter=400, print_every=50):
+    def train_lbfgs(self, max_iter=400, print_every=100):
         opt = torch.optim.LBFGS(
             self.model.parameters(),
             lr=1.0,
@@ -123,6 +125,11 @@ class PINN:
             L_total.backward()
             self._log(L_total, L_pde, L_ic, L_bc)
             k["i"] += 1
+            if k["i"] % print_every == 0:
+                print(
+                    f"  [PINN LBFGS] iter={k['i']:6d} "
+                    f"total={L_total.item():.3e}"
+                )
             return L_total
 
         opt.step(closure)
@@ -141,7 +148,7 @@ class PINN:
         XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1).to(self.device)
         U = self.model(XY).reshape(Nx, Ny).cpu().numpy()
         return x.cpu().numpy(), y.cpu().numpy(), U
-#GER method
+
 class GERPINN:
     def __init__(
         self,
@@ -236,6 +243,7 @@ class GERPINN:
 
         L_ic = torch.zeros((), device=self.device)
 
+        # Uses the same X_g (which we will map to X_f)
         G = self.gradient_features(self.X_g)
         H, logdet = self.gaussian_entropy(G)
 
@@ -248,7 +256,7 @@ class GERPINN:
 
         return L_total, L_pde, L_ic, L_bc, H, logdet
 
-    def train_adam(self, iters=4000, lr=1e-3, print_every=200):
+    def train_adam(self, iters=4000, lr=1e-3, print_every=1000):
         opt = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.model.train()
         for it in range(1, iters + 1):
@@ -258,9 +266,13 @@ class GERPINN:
             opt.step()
             self._log(L_total, L_pde, L_ic, L_bc, H, logdet)
             if it % print_every == 0:
-                pass
+                print(
+                    f"  [GERPINN Adam] iter={it:6d} "
+                    f"total={L_total.item():.3e} "
+                    f"pde={L_pde.item():.3e} H={H.item():.3e}"
+                )
 
-    def train_lbfgs(self, max_iter=400, print_every=50):
+    def train_lbfgs(self, max_iter=400, print_every=100):
         opt = torch.optim.LBFGS(
             self.model.parameters(),
             lr=1.0,
@@ -280,6 +292,11 @@ class GERPINN:
             L_total.backward()
             self._log(L_total, L_pde, L_ic, L_bc, H, logdet)
             k["i"] += 1
+            if k["i"] % print_every == 0:
+                print(
+                    f"  [GERPINN LBFGS] iter={k['i']:6d} "
+                    f"total={L_total.item():.3e}"
+                )
             return L_total
 
         opt.step(closure)
@@ -332,22 +349,44 @@ def plot_heatmap(U, x, y, title, cbar_label="u(x,y)", vmin=None, vmax=None):
     plt.title(title)
     plt.tight_layout()
 
-def plot_loss_curves(loss_hist: dict, title_prefix: str):
+def plot_avg_loss_curves(loss_hist_list: list, title_prefix: str):
+    # Determine max length
+    max_len = max(len(h["total"]) for h in loss_hist_list)
+    
+    # Helper to aggregate a key
+    def get_matrix(key):
+        arrs = []
+        for h in loss_hist_list:
+            vals = h[key]
+            # Pad with nan or last value. Here we pad with last value for visual continuity
+            pad = [vals[-1]] * (max_len - len(vals))
+            arrs.append(vals + pad)
+        return np.array(arrs) # Shape (N_runs, max_len)
+
+    keys = ["total", "pde", "bc"]
+    means = {}
+    stds = {}
+    
+    for k in keys:
+        mat = get_matrix(k)
+        means[k] = np.mean(mat, axis=0)
+        stds[k] = np.std(mat, axis=0)
+
     plt.figure(figsize=(8, 5))
-    plt.semilogy(loss_hist["total"], label="total")
-    plt.semilogy(loss_hist["pde"], label="PDE")
-    plt.semilogy(loss_hist["bc"], label="BC")
-    plt.semilogy(loss_hist["ic"], label="IC (0)")
+    for k in keys:
+        plt.semilogy(means[k], label=f"{k} (mean)")
+        # Fill between std dev
+        lower = np.maximum(means[k] - stds[k], 1e-9) # ensure positive for log plot
+        upper = means[k] + stds[k]
+        plt.fill_between(range(max_len), lower, upper, alpha=0.2)
+        
     plt.xlabel("Loss evaluation")
     plt.ylabel("Loss (log scale)")
-    plt.title(f"{title_prefix} Loss Curves")
+    plt.title(f"{title_prefix} Avg Loss Curves (10 runs)")
     plt.legend()
     plt.tight_layout()
 
-def make_shared_training_points(device, seed, N_f=20000, N_bc=2000):
-    # Using specific seed for data generation
-    torch.manual_seed(seed)
-    
+def make_shared_training_points(device, N_f=120, N_bc=120):
     x_f = -1 + 2 * torch.rand(N_f, 1, device=device)
     y_f = -1 + 2 * torch.rand(N_f, 1, device=device)
     X_f = torch.cat([x_f, y_f], dim=1)
@@ -393,137 +432,131 @@ def assign_shared_points(obj, shared):
     obj.X_bc_bottom, obj.y_bc_bottom = shared["X_bc_bottom"], shared["y_bc_bottom"]
     obj.X_bc_top, obj.y_bc_top = shared["X_bc_top"], shared["y_bc_top"]
 
-def make_entropy_points(device, N_g=2048, seed=999):
-    torch.manual_seed(seed)
-    x_g = -1 + 2 * torch.rand(N_g, 1, device=device)
-    y_g = -1 + 2 * torch.rand(N_g, 1, device=device)
-    X_g = torch.cat([x_g, y_g], dim=1)
-    X_g.requires_grad_(True)
-    return X_g
-
-
-def run_trial(model_type, trial_seed, device, params):
-    # use trial_seed for data generation so points are different per run
-    shared = make_shared_training_points(device=device, seed=trial_seed, N_f=params['N_f'], N_bc=params['N_bc'])
-    
-    # init model
-    if model_type == 'PINN':
-        model = PINN(
-            hidden=params['hidden'], depth=params['depth'], act=params['act'],
-            lambda_pde=params['lambda_pde'], lambda_ic=params['lambda_ic'], lambda_bc=params['lambda_bc'],
-            seed=trial_seed, device=device
-        )
-    else:
-        model = GERPINN(
-            hidden=params['hidden'], depth=params['depth'], act=params['act'],
-            lambda_pde=params['lambda_pde'], lambda_ic=params['lambda_ic'], lambda_bc=params['lambda_bc'],
-            lambda_h=params['lambda_h'], eps_cov=params['eps_cov'], 
-            use_extended_grad=True, seed=trial_seed, device=device
-        )
-        # Assign entropy pts for GERPINN
-        #  vary seed for entropy pts
-        model.X_g = make_entropy_points(device=device, N_g=params['N_g'], seed=trial_seed + 9999)
-
-    assign_shared_points(model, shared)
-
-    # Adam
-    model.train_adam(iters=params['adam_iters'], lr=params['adam_lr'], print_every=params['print_every'])
-    
-    # LBFGS
-    if model_type == 'GERPINN':
-        #entropy term may interfere with BFGS
-        model.lambda_h = 0.0
-        
-    model.train_lbfgs(max_iter=params['lbfgs_iters'], print_every=params['print_every'])
-
-    # 4. Evaluation
-    Nx, Ny = 201, 201
-    x_grid, y_grid, U_pred = model.predict_on_grid(Nx=Nx, Ny=Ny)
-    _, _, U_true = analytic_on_grid(Nx=Nx, Ny=Ny, device=device)
-    
-    error = avg_l2_error(U_pred, U_true)
-    
-    return error, model, U_pred, U_true, x_grid, y_grid
-
 def main():
-    # Hyperparameters
-    params = {
-        'hidden': 64, 'depth': 4, 'act': nn.Tanh,
-        'N_f': 20000, 'N_bc': 2000, 'N_g': 2048,
-        'adam_iters': 4000, 'adam_lr': 1e-3, 'lbfgs_iters': 400,
-        'lambda_pde': 1.0, 'lambda_bc': 1.0, 'lambda_ic': 0.0,
-        'lambda_h': 1e-3, 'eps_cov': 1e-6,
-        'print_every': 1000 
-    }
+    hidden = 64
+    depth = 4
+    act = nn.Tanh
+
+    # MODIFIED: Changed counts to 120 each as requested
+    N_f = 120
+    N_bc = 120
+
+    adam_iters = 4000
+    adam_lr = 1e-3
+    lbfgs_iters = 400
+
+    lambda_pde = 1.0
+    lambda_bc = 1.0
+    lambda_ic = 0.0
+    lambda_h = 1e-3
+    eps_cov = 1e-6
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
     
-    pinn_errors = []
-    gerpinn_errors = []
+    # Storage for 10 runs
+    N_runs = 10
+    l2_van_runs = []
+    l2_ger_runs = []
     
-    num_runs = 10
+    hist_van_runs = []
+    hist_ger_runs = []
     
-    # hold the last runs data for plotting
-    last_pinn_data = None
-    last_ger_data = None
+    error_field_van_acc = 0 # Accumulator for absolute error fields
+    error_field_ger_acc = 0
 
-    print(f"\nStarting {num_runs} independent runs for PINN and GERPINN...")
-    print("-" * 60)
-    print(f"{'Run':<5} | {'PINN Error':<15} | {'GERPINN Error':<15}")
-    print("-" * 60)
+    Nx, Ny = 201, 201
+    x, y, U_true = analytic_on_grid(Nx=Nx, Ny=Ny, device=device)
 
-    start_time = time.time()
+    print(f"\nStarting {N_runs} runs. Training on {N_f} PDE points + {N_bc} BC points.")
 
-    for i in range(num_runs):
-        # Use different seeds for PINN and GERPINN to ensure independence
-        # Ensure they are deterministic per run index
-        seed_pinn = i
-        seed_ger = i + 1000 
+    for run_i in range(N_runs):
+        seed = run_i
+        print(f"\n--- Run {run_i+1}/{N_runs} (Seed {seed}) ---")
         
-        # Train PINN 
-        err_pinn, model_pinn, U_pinn, U_true, x, y = run_trial('PINN', seed_pinn, device, params)
-        pinn_errors.append(err_pinn)
+        # 1. New data for each run (or just new seed)
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        shared = make_shared_training_points(device=device, N_f=N_f, N_bc=N_bc)
         
-        # Train GERPINN 
-        err_ger, model_ger, U_ger, _, _, _ = run_trial('GERPINN', seed_ger, device, params)
-        gerpinn_errors.append(err_ger)
-        
-        print(f"{i+1:<5} | {err_pinn:.5e}     | {err_ger:.5e}")
-        
-        if i == num_runs - 1:
-            last_pinn_data = (model_pinn, U_pinn)
-            last_ger_data = (model_ger, U_ger)
+        # 2. Initialize Models
+        pinn = PINN(
+            hidden=hidden, depth=depth, act=act,
+            lambda_pde=lambda_pde, lambda_ic=lambda_ic, lambda_bc=lambda_bc,
+            seed=seed, device=device
+        )
+        assign_shared_points(pinn, shared)
 
-    total_time = time.time() - start_time
-    print("-" * 60)
-    print(f"Total time: {total_time:.2f}s")
+        ger = GERPINN(
+            hidden=hidden, depth=depth, act=act,
+            lambda_pde=lambda_pde, lambda_ic=lambda_ic, lambda_bc=lambda_bc,
+            lambda_h=lambda_h, eps_cov=eps_cov, use_extended_grad=True,
+            seed=seed, device=device
+        )
+        assign_shared_points(ger, shared)
+        
+        # MODIFIED: GERPINN uses the same collocation points (X_f) for entropy
+        ger.X_g = shared["X_f"]
+
+        # 3. Train PINN
+        print("Training PINN...")
+        pinn.train_adam(iters=adam_iters, lr=adam_lr, print_every=2000)
+        pinn.train_lbfgs(max_iter=lbfgs_iters, print_every=400)
+        
+        # 4. Train GERPINN
+        print("Training GERPINN...")
+        ger.train_adam(iters=adam_iters, lr=adam_lr, print_every=2000)
+        ger.lambda_h = 0.0
+        ger.train_lbfgs(max_iter=lbfgs_iters, print_every=400)
+        
+        # 5. Evaluate
+        _, _, U_van = pinn.predict_on_grid(Nx=Nx, Ny=Ny)
+        _, _, U_ger = ger.predict_on_grid(Nx=Nx, Ny=Ny)
+        
+        l2_van = avg_l2_error(U_van, U_true)
+        l2_ger = avg_l2_error(U_ger, U_true)
+        
+        l2_van_runs.append(l2_van)
+        l2_ger_runs.append(l2_ger)
+        
+        hist_van_runs.append(pinn.loss_hist)
+        hist_ger_runs.append(ger.loss_hist)
+        
+        error_field_van_acc += np.abs(U_van - U_true)
+        error_field_ger_acc += np.abs(U_ger - U_true)
+        
+        print(f"Run {run_i+1} L2 Error: PINN={l2_van:.4e}, GER={l2_ger:.4e}")
+
+    # Process averaged results
+    l2_van_avg = np.mean(l2_van_runs)
+    l2_van_std = np.std(l2_van_runs)
+    l2_ger_avg = np.mean(l2_ger_runs)
+    l2_ger_std = np.std(l2_ger_runs)
     
-    # Report Statistics
-    print("\nFinal Results:")
-    print(f"PINN Average L2 Error:    {np.mean(pinn_errors):.6e} +/- {np.std(pinn_errors):.6e}")
-    print(f"GERPINN Average L2 Error: {np.mean(gerpinn_errors):.6e} +/- {np.std(gerpinn_errors):.6e}")
+    print("\n" + "="*30)
+    print("FINAL RESULTS (Average over 10 runs)")
+    print("="*30)
+    print(f"PINN L2 Error:    {l2_van_avg:.6e} +/- {l2_van_std:.6e}")
+    print(f"GERPINN L2 Error: {l2_ger_avg:.6e} +/- {l2_ger_std:.6e}")
 
-    #Evaluations
-    (pinn_model, U_van) = last_pinn_data
-    (ger_model, U_ger) = last_ger_data
+    # Average absolute error fields
+    E_van_avg = error_field_van_acc / N_runs
+    E_ger_avg = error_field_ger_acc / N_runs
+    emax = float(max(E_van_avg.max(), E_ger_avg.max()))
+
+    # Plotting
+    plot_heatmap(U_true, x, y, "Analytical Solution")
     
-    U_all = np.concatenate([U_true.ravel(), U_van.ravel(), U_ger.ravel()])
-    umin, umax = float(U_all.min()), float(U_all.max())
+    plot_heatmap(E_van_avg, x, y, 
+                 "Avg |Vanilla-PINN - Analytic| (10 runs)", 
+                 cbar_label="avg abs error", vmin=0.0, vmax=emax)
+                 
+    plot_heatmap(E_ger_avg, x, y, 
+                 "Avg |GERPINN - Analytic| (10 runs)", 
+                 cbar_label="avg abs error", vmin=0.0, vmax=emax)
 
-    E_van = np.abs(U_van - U_true)
-    E_ger = np.abs(U_ger - U_true)
-    emax = float(max(E_van.max(), E_ger.max()))
-
-    plot_heatmap(U_true, x, y, "Analytical Solution", vmin=umin, vmax=umax)
-    plot_heatmap(U_van, x, y, "Vanilla-PINN Solution", vmin=umin, vmax=umax)
-    plot_heatmap(U_ger, x, y, "GERPINN Solution", vmin=umin, vmax=umax)
-
-    plot_heatmap(E_van, x, y, "|Vanilla-PINN - Analytical|", cbar_label="abs error", vmin=0.0, vmax=emax)
-    plot_heatmap(E_ger, x, y, "|GERPINN - Analytical|", cbar_label="abs error", vmin=0.0, vmax=emax)
-
-    plot_loss_curves(pinn_model.loss_hist, "PINN")
-    plot_loss_curves(ger_model.loss_hist, "GERPINN")
+    plot_avg_loss_curves(hist_van_runs, "PINN")
+    plot_avg_loss_curves(hist_ger_runs, "GERPINN")
 
     plt.show()
 
