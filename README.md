@@ -1,4 +1,4 @@
-[![GaPi](https://img.shields.io/pypi/v/neuraloperator)](https://pypi.org/project/neuraloperator/)
+[![PyTorch](https://pytorch.org)](https://docs.pytorch.org/docs/stable/index.html?_gl=1*n8m3fr*_up*MQ..*_ga*MTI3MjUwMjk3OS4xNzcyMjU4NTIw*_ga_469Y0W5V62*czE3NzIyNTg1MTkkbzEkZzAkdDE3NzIyNTg1MTkkajYwJGwwJGgw)
 # Gradient Entropy Regularization
 
 Gradient Entropy Regularization (GER) is a novel maximum-entropy (MaxEnt) regularization approach for physics-informed neural networks (PINNs) applied to partial differential equations (PDEs) of varying types. GER improves PINN performance across both steady-state and time-dependent PDEs by embedding the predicted solution gradient directly into the residual formulation.
