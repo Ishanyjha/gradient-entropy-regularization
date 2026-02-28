@@ -1,6 +1,6 @@
-###############################################
-Gradient Entropy Regularization
-###############################################
+
+<h>Gradient Entropy Regularization</h>
+
 
 Gradient Entropy Regularization (GER) is a new maximum-entropy (MaxEnt) approach for regularization in physics-informed neural networks (PINNs) for solving PDEs of varying types. GER enhances the performance of PINNs accross steady-state and time-dependent PDEs through embedding the predicted solution gradient into the residual. 
 
