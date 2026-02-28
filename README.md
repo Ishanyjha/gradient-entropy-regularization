@@ -1,17 +1,11 @@
+# Gradient Entropy Regularization
 
-<h>Gradient Entropy Regularization</h>
+Gradient Entropy Regularization (GER) is a novel maximum-entropy (MaxEnt) regularization approach for physics-informed neural networks (PINNs) applied to partial differential equations (PDEs) of varying types. GER improves PINN performance across both steady-state and time-dependent PDEs by embedding the predicted solution gradient directly into the residual formulation.
 
+## Methodology
 
-Gradient Entropy Regularization (GER) is a new maximum-entropy (MaxEnt) approach for regularization in physics-informed neural networks (PINNs) for solving PDEs of varying types. GER enhances the performance of PINNs accross steady-state and time-dependent PDEs through embedding the predicted solution gradient into the residual. 
+GER is introduced as an additional term subtracted from the standard PINN loss function. Specifically, we perform Monte Carlo sampling of gradient observations across the domain and compute the corresponding mean and covariance, with optional parameters controlling which spatial dimensions are considered. From these statistics, we compute the Gaussian Differential Entropy (GDE) of the gradient field. This entropy term is then subtracted from the loss function with an associated weighting factor, reflecting its maximization objective. Intuitively, this maximum-entropy formulation promotes solution stability and mitigates convergence toward spurious or physically inconsistent approximations.
 
-###############################################
-Methodology
-###############################################
+## Data
 
-GER is formulated as a term subtracted from the PINN loss function. Particularly, we perform MC sampling of gradient observations across the domain, then compute both mean and covariance (with optional parameters constorlling which dimensions are considered), form this we compute the Gaussian differential entropy (GDE) of the gradient field. We then subtract this term (with a weight) from the loss function to reflect that it is a maximized quantity. By intuition, the maximum-entropy approach should allow PINNs to attain more stable solutions, and prevent convergence on spurious approximations.
-
-###############################################
-Data
-###############################################
-
-The data utilized in this project consists of sample points from PDEs. For attaining ground truth values, we utilize analytical solutions (for simpler PDEs) and CFD-sourced data (see Yu et. al, 2021 and Raissi et. al, 2020). 
+The data used in this project consists of sampled points from PDE solution domains. Ground truth values are obtained using analytical solutions for simpler PDEs and computational fluid dynamics (CFD)–sourced datasets for more complex cases (see Yu et al., 2021 and Raissi et al., 2020).
